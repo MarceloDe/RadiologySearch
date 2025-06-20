@@ -1,0 +1,422 @@
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import './App.css';
+
+// Configure API client
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Main App Component
+function App() {
+  const [systemStatus, setSystemStatus] = useState(null);
+  const [currentView, setCurrentView] = useState('dashboard');
+  const [caseData, setCaseData] = useState({
+    case_id: '',
+    patient_age: '',
+    patient_sex: 'Male',
+    clinical_history: '',
+    imaging_modality: 'MRI',
+    anatomical_region: 'Brain',
+    image_description: ''
+  });
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [prompts, setPrompts] = useState([]);
+  const [selectedPrompt, setSelectedPrompt] = useState(null);
+
+  // Check system status on load
+  useEffect(() => {
+    checkSystemStatus();
+    loadPrompts();
+  }, []);
+
+  const checkSystemStatus = async () => {
+    try {
+      const response = await api.get('/health');
+      setSystemStatus(response.data);
+    } catch (error) {
+      console.error('Failed to check system status:', error);
+      setSystemStatus({ status: 'error', error: error.message });
+    }
+  };
+
+  const loadPrompts = async () => {
+    try {
+      const response = await api.get('/api/prompts');
+      setPrompts(response.data.prompts);
+    } catch (error) {
+      console.error('Failed to load prompts:', error);
+    }
+  };
+
+  const handleCaseSubmit = async (e) => {
+    e.preventDefault();
+    setIsAnalyzing(true);
+    setAnalysisResult(null);
+
+    try {
+      const caseWithId = {
+        ...caseData,
+        case_id: `case_${Date.now()}`
+      };
+
+      const response = await api.post('/api/analyze-case', caseWithId);
+      setAnalysisResult(response.data);
+    } catch (error) {
+      console.error('Analysis failed:', error);
+      setAnalysisResult({
+        error: true,
+        message: error.response?.data?.detail || error.message
+      });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleInputChange = (field, value) => {
+    setCaseData(prev => ({
+      ...prev,
+      [field]: value
+    }));
+  };
+
+  // Dashboard Component
+  const Dashboard = () => (
+    <div className="dashboard">
+      <h2>🏥 Radiology AI System Dashboard</h2>
+      
+      <div className="status-grid">
+        <div className="status-card">
+          <h3>System Status</h3>
+          <div className={`status-indicator ${systemStatus?.status}`}>
+            {systemStatus?.status || 'Unknown'}
+          </div>
+          {systemStatus && (
+            <div className="status-details">
+              <p>LangSmith: {systemStatus.langsmith_enabled ? '✅ Enabled' : '❌ Disabled'}</p>
+              <p>Project: {systemStatus.langsmith_project}</p>
+              <p>Models: {systemStatus.models_available?.join(', ')}</p>
+              <p>Database: {systemStatus.database_connected ? '✅ Connected' : '❌ Disconnected'}</p>
+            </div>
+          )}
+        </div>
+
+        <div className="status-card">
+          <h3>LangSmith Integration</h3>
+          <div className="langsmith-info">
+            <p>🔍 <strong>Observability:</strong> Full tracing enabled</p>
+            <p>📊 <strong>Project:</strong> {systemStatus?.langsmith_project}</p>
+            <p>🔗 <strong>Dashboard:</strong> 
+              <a href={`https://smith.langchain.com/projects/${systemStatus?.langsmith_project}`} 
+                 target="_blank" rel="noopener noreferrer">
+                View in LangSmith
+              </a>
+            </p>
+          </div>
+        </div>
+
+        <div className="status-card">
+          <h3>Available Models</h3>
+          <div className="models-list">
+            <div className="model-item">🧠 Claude (Medical Reasoning)</div>
+            <div className="model-item">📄 Mistral (Document Processing)</div>
+            <div className="model-item">🔍 DeepSeek (Search Optimization)</div>
+          </div>
+        </div>
+
+        <div className="status-card">
+          <h3>Quick Actions</h3>
+          <div className="quick-actions">
+            <button onClick={() => setCurrentView('analyze')} className="action-btn primary">
+              🔬 New Case Analysis
+            </button>
+            <button onClick={() => setCurrentView('prompts')} className="action-btn secondary">
+              ⚙️ Manage Prompts
+            </button>
+            <button onClick={checkSystemStatus} className="action-btn secondary">
+              🔄 Refresh Status
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Case Analysis Component
+  const CaseAnalysis = () => (
+    <div className="case-analysis">
+      <h2>🔬 AI-Powered Case Analysis</h2>
+      
+      <form onSubmit={handleCaseSubmit} className="case-form">
+        <div className="form-grid">
+          <div className="form-group">
+            <label>Patient Age</label>
+            <input
+              type="number"
+              value={caseData.patient_age}
+              onChange={(e) => handleInputChange('patient_age', parseInt(e.target.value))}
+              required
+              min="0"
+              max="120"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Patient Sex</label>
+            <select
+              value={caseData.patient_sex}
+              onChange={(e) => handleInputChange('patient_sex', e.target.value)}
+            >
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Imaging Modality</label>
+            <select
+              value={caseData.imaging_modality}
+              onChange={(e) => handleInputChange('imaging_modality', e.target.value)}
+            >
+              <option value="MRI">MRI</option>
+              <option value="CT">CT</option>
+              <option value="X-ray">X-ray</option>
+              <option value="Ultrasound">Ultrasound</option>
+              <option value="PET">PET</option>
+              <option value="Nuclear Medicine">Nuclear Medicine</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Anatomical Region</label>
+            <select
+              value={caseData.anatomical_region}
+              onChange={(e) => handleInputChange('anatomical_region', e.target.value)}
+            >
+              <option value="Brain">Brain</option>
+              <option value="Spine">Spine</option>
+              <option value="Chest">Chest</option>
+              <option value="Abdomen">Abdomen</option>
+              <option value="Pelvis">Pelvis</option>
+              <option value="Extremities">Extremities</option>
+              <option value="Head and Neck">Head and Neck</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="form-group full-width">
+          <label>Clinical History</label>
+          <textarea
+            value={caseData.clinical_history}
+            onChange={(e) => handleInputChange('clinical_history', e.target.value)}
+            placeholder="Enter patient's clinical history, symptoms, and relevant medical background..."
+            rows="4"
+            required
+          />
+        </div>
+
+        <div className="form-group full-width">
+          <label>Image Description</label>
+          <textarea
+            value={caseData.image_description}
+            onChange={(e) => handleInputChange('image_description', e.target.value)}
+            placeholder="Detailed description of imaging findings, including sequences, enhancement patterns, measurements, etc..."
+            rows="6"
+            required
+          />
+        </div>
+
+        <button 
+          type="submit" 
+          className="analyze-btn"
+          disabled={isAnalyzing}
+        >
+          {isAnalyzing ? '🔄 Analyzing with AI...' : '🚀 Start AI Analysis'}
+        </button>
+      </form>
+
+      {isAnalyzing && (
+        <div className="analysis-progress">
+          <div className="progress-steps">
+            <div className="step active">🧠 Extracting Radiology Context</div>
+            <div className="step active">🔍 Searching Medical Literature</div>
+            <div className="step active">📄 Processing Documents</div>
+            <div className="step active">⚕️ Generating Diagnosis</div>
+          </div>
+          <p>AI agents are working on your case... This may take 30-60 seconds.</p>
+        </div>
+      )}
+
+      {analysisResult && (
+        <div className="analysis-results">
+          {analysisResult.error ? (
+            <div className="error-result">
+              <h3>❌ Analysis Failed</h3>
+              <p>{analysisResult.message}</p>
+            </div>
+          ) : (
+            <div className="success-result">
+              <h3>✅ Analysis Complete</h3>
+              
+              <div className="results-grid">
+                <div className="result-section">
+                  <h4>🎯 Primary Diagnosis</h4>
+                  <div className="diagnosis-card">
+                    <h5>{analysisResult.diagnosis_result?.primary_diagnosis?.diagnosis}</h5>
+                    <p><strong>Confidence:</strong> {(analysisResult.diagnosis_result?.primary_diagnosis?.confidence_score * 100).toFixed(1)}%</p>
+                    <p><strong>Reasoning:</strong> {analysisResult.diagnosis_result?.primary_diagnosis?.reasoning}</p>
+                  </div>
+                </div>
+
+                <div className="result-section">
+                  <h4>🔍 Radiology Context</h4>
+                  <div className="context-details">
+                    <p><strong>Anatomy:</strong> {analysisResult.radiology_context?.anatomy?.join(', ')}</p>
+                    <p><strong>Modality:</strong> {analysisResult.radiology_context?.imaging_modality}</p>
+                    <p><strong>Enhancement:</strong> {analysisResult.radiology_context?.enhancement_pattern?.join(', ')}</p>
+                  </div>
+                </div>
+
+                <div className="result-section">
+                  <h4>📚 Literature Evidence</h4>
+                  <div className="literature-list">
+                    {analysisResult.literature_matches?.slice(0, 3).map((match, index) => (
+                      <div key={index} className="literature-item">
+                        <h6>{match.title}</h6>
+                        <p><strong>Relevance:</strong> {(match.relevance_score * 100).toFixed(1)}%</p>
+                        <p>{match.match_reasoning}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="result-section">
+                  <h4>🔬 Differential Diagnoses</h4>
+                  <div className="differential-list">
+                    {analysisResult.diagnosis_result?.differential_diagnoses?.map((diff, index) => (
+                      <div key={index} className="differential-item">
+                        <h6>{diff.diagnosis}</h6>
+                        <p><strong>Probability:</strong> {(diff.probability * 100).toFixed(1)}%</p>
+                        <p>{diff.reasoning}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="metadata">
+                <h4>📊 Processing Metadata</h4>
+                <p><strong>Case ID:</strong> {analysisResult.case_id}</p>
+                <p><strong>Models Used:</strong> {analysisResult.processing_metadata?.models_used?.join(', ')}</p>
+                <p><strong>Literature Sources:</strong> {analysisResult.processing_metadata?.literature_sources}</p>
+                <p><strong>LangSmith Project:</strong> {analysisResult.processing_metadata?.langsmith_project}</p>
+                <p><strong>Timestamp:</strong> {new Date(analysisResult.processing_metadata?.timestamp).toLocaleString()}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // Prompt Management Component
+  const PromptManagement = () => (
+    <div className="prompt-management">
+      <h2>⚙️ Prompt Management</h2>
+      
+      <div className="prompts-grid">
+        {prompts.map((prompt, index) => (
+          <div key={index} className="prompt-card">
+            <h4>{prompt.name}</h4>
+            <p><strong>ID:</strong> {prompt.template_id}</p>
+            <p><strong>Version:</strong> {prompt.version}</p>
+            <p><strong>Model:</strong> {prompt.model_type}</p>
+            <p><strong>Description:</strong> {prompt.description}</p>
+            <button 
+              onClick={() => setSelectedPrompt(prompt)}
+              className="view-prompt-btn"
+            >
+              View/Edit
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {selectedPrompt && (
+        <div className="prompt-editor">
+          <h3>Editing: {selectedPrompt.name}</h3>
+          <textarea
+            value={selectedPrompt.template_text}
+            onChange={(e) => setSelectedPrompt({
+              ...selectedPrompt,
+              template_text: e.target.value
+            })}
+            rows="15"
+            className="prompt-textarea"
+          />
+          <div className="prompt-actions">
+            <button className="save-btn">Save New Version</button>
+            <button 
+              className="cancel-btn"
+              onClick={() => setSelectedPrompt(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // Navigation
+  const Navigation = () => (
+    <nav className="navigation">
+      <div className="nav-brand">
+        <h1>🏥 Radiology AI</h1>
+        <span className="nav-subtitle">LangChain + LangSmith</span>
+      </div>
+      <div className="nav-links">
+        <button 
+          className={currentView === 'dashboard' ? 'nav-link active' : 'nav-link'}
+          onClick={() => setCurrentView('dashboard')}
+        >
+          📊 Dashboard
+        </button>
+        <button 
+          className={currentView === 'analyze' ? 'nav-link active' : 'nav-link'}
+          onClick={() => setCurrentView('analyze')}
+        >
+          🔬 Analyze Case
+        </button>
+        <button 
+          className={currentView === 'prompts' ? 'nav-link active' : 'nav-link'}
+          onClick={() => setCurrentView('prompts')}
+        >
+          ⚙️ Prompts
+        </button>
+      </div>
+    </nav>
+  );
+
+  // Main render
+  return (
+    <div className="App">
+      <Navigation />
+      <main className="main-content">
+        {currentView === 'dashboard' && <Dashboard />}
+        {currentView === 'analyze' && <CaseAnalysis />}
+        {currentView === 'prompts' && <PromptManagement />}
+      </main>
+    </div>
+  );
+}
+
+export default App;
+
