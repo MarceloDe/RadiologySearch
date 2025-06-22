@@ -58,7 +58,7 @@ services:
         echo 'Waiting for MongoDB...' &&
         sleep 10 &&
         echo 'Starting Radiology AI Backend...' &&
-        python main.py
+        uvicorn main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 180 --timeout-graceful-shutdown 30
       "
 
   # Frontend Application

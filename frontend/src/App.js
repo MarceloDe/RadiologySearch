@@ -1,16 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import api from './api';
+import ImageCarousel from './ImageCarousel';
 import './App.css';
-
-// Configure API client
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 30000,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
 
 // Main App Component
 function App() {
@@ -70,9 +61,26 @@ function App() {
       setAnalysisResult(response.data);
     } catch (error) {
       console.error('Analysis failed:', error);
+      let errorMessage = 'Unknown error occurred';
+      
+      if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+        errorMessage = 'Request timed out. The analysis is taking longer than expected. This usually happens when the AI models are processing complex cases. Please try again with a simpler case or contact support.';
+      } else if (error.response) {
+        errorMessage = error.response.data?.detail || error.response.statusText || 'Server error';
+      } else if (error.request) {
+        errorMessage = 'No response from server. Please check your connection.';
+      } else {
+        errorMessage = error.message;
+      }
+      
       setAnalysisResult({
         error: true,
-        message: error.response?.data?.detail || error.message
+        message: errorMessage,
+        details: {
+          code: error.code,
+          timeout: api.defaults.timeout,
+          actualError: error.message
+        }
       });
     } finally {
       setIsAnalyzing(false);
@@ -250,7 +258,7 @@ function App() {
             <div className="step active">📄 Processing Documents</div>
             <div className="step active">⚕️ Generating Diagnosis</div>
           </div>
-          <p>AI agents are working on your case... This may take 30-60 seconds.</p>
+          <p>AI agents are working on your case... This may take 60-90 seconds for complex analysis.</p>
         </div>
       )}
 
@@ -260,6 +268,13 @@ function App() {
             <div className="error-result">
               <h3>❌ Analysis Failed</h3>
               <p>{analysisResult.message}</p>
+              {analysisResult.details && (
+                <div className="error-details">
+                  <p><small>Error code: {analysisResult.details.code}</small></p>
+                  <p><small>Configured timeout: {analysisResult.details.timeout}ms</small></p>
+                  <p><small>Actual error: {analysisResult.details.actualError}</small></p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="success-result">
@@ -284,14 +299,42 @@ function App() {
                   </div>
                 </div>
 
-                <div className="result-section">
-                  <h4>📚 Literature Evidence</h4>
-                  <div className="literature-list">
-                    {analysisResult.literature_matches?.slice(0, 3).map((match, index) => (
-                      <div key={index} className="literature-item">
-                        <h6>{match.title}</h6>
-                        <p><strong>Relevance:</strong> {(match.relevance_score * 100).toFixed(1)}%</p>
-                        <p>{match.match_reasoning}</p>
+                <div className="result-section full-width">
+                  <h4>📚 Literature Evidence ({analysisResult.literature_matches?.length || 0} papers with images)</h4>
+                  <div className="literature-list enhanced">
+                    {analysisResult.literature_matches?.map((match, index) => (
+                      <div key={index} className="literature-item enhanced">
+                        <div className="literature-header">
+                          <h6>{index + 1}. {match.title}</h6>
+                          <a href={match.url} target="_blank" rel="noopener noreferrer" className="literature-link">
+                            🔗 View Paper
+                          </a>
+                        </div>
+                        <div className="literature-meta">
+                          <span className="journal">{match.journal}</span>
+                          <span className="year">{match.year}</span>
+                          <span className="relevance">Relevance: {(match.relevance_score * 100).toFixed(0)}%</span>
+                          {match.extracted_images?.length > 0 && (
+                            <span className="image-count">📷 {match.extracted_images.length} images</span>
+                          )}
+                        </div>
+                        <p className="match-reasoning">{match.match_reasoning}</p>
+                        {match.relevant_sections?.length > 0 && (
+                          <div className="relevant-sections">
+                            <strong>Key Findings:</strong>
+                            <ul>
+                              {match.relevant_sections.slice(0, 2).map((section, idx) => (
+                                <li key={idx}>{section.substring(0, 150)}...</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {match.extracted_images?.length > 0 && (
+                          <ImageCarousel 
+                            images={match.extracted_images} 
+                            paperTitle={match.title}
+                          />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -327,53 +370,123 @@ function App() {
   );
 
   // Prompt Management Component
-  const PromptManagement = () => (
-    <div className="prompt-management">
-      <h2>⚙️ Prompt Management</h2>
-      
-      <div className="prompts-grid">
-        {prompts.map((prompt, index) => (
-          <div key={index} className="prompt-card">
-            <h4>{prompt.name}</h4>
-            <p><strong>ID:</strong> {prompt.template_id}</p>
-            <p><strong>Version:</strong> {prompt.version}</p>
-            <p><strong>Model:</strong> {prompt.model_type}</p>
-            <p><strong>Description:</strong> {prompt.description}</p>
-            <button 
-              onClick={() => setSelectedPrompt(prompt)}
-              className="view-prompt-btn"
-            >
-              View/Edit
-            </button>
-          </div>
-        ))}
-      </div>
+  const PromptManagement = () => {
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveMessage, setSaveMessage] = useState('');
 
-      {selectedPrompt && (
-        <div className="prompt-editor">
-          <h3>Editing: {selectedPrompt.name}</h3>
-          <textarea
-            value={selectedPrompt.template_text}
-            onChange={(e) => setSelectedPrompt({
-              ...selectedPrompt,
-              template_text: e.target.value
-            })}
-            rows="15"
-            className="prompt-textarea"
-          />
-          <div className="prompt-actions">
-            <button className="save-btn">Save New Version</button>
-            <button 
-              className="cancel-btn"
-              onClick={() => setSelectedPrompt(null)}
-            >
-              Cancel
-            </button>
-          </div>
+    const handleSavePrompt = async () => {
+      if (!selectedPrompt) return;
+      
+      setIsSaving(true);
+      setSaveMessage('');
+      
+      try {
+        const response = await api.put(`/api/prompts/${selectedPrompt.template_id}`, selectedPrompt);
+        
+        if (response.data.success) {
+          setSaveMessage(`✅ ${response.data.message}`);
+          // Reload prompts to show new version
+          await loadPrompts();
+          // Update selected prompt with new version
+          setSelectedPrompt({
+            ...selectedPrompt,
+            version: response.data.version
+          });
+        }
+      } catch (error) {
+        console.error('Failed to save prompt:', error);
+        setSaveMessage('❌ Failed to save prompt: ' + (error.response?.data?.detail || error.message));
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    return (
+      <div className="prompt-management">
+        <h2>⚙️ Prompt Management</h2>
+        
+        <div className="prompt-info-banner">
+          <p>💡 <strong>Tip:</strong> Edit these prompts to customize how the AI agents behave. Changes take effect immediately for new analyses.</p>
         </div>
-      )}
-    </div>
-  );
+        
+        {prompts.length === 0 ? (
+          <div className="no-prompts">
+            <p>No prompts available. Initialize default prompts by running:</p>
+            <code>docker exec radiology-backend python initialize_prompts.py</code>
+          </div>
+        ) : (
+          <div className="prompts-grid">
+            {prompts.map((prompt, index) => (
+              <div key={prompt.template_id} className="prompt-card">
+                <h4>{prompt.name}</h4>
+                <p><strong>ID:</strong> {prompt.template_id}</p>
+                <p><strong>Version:</strong> {prompt.version}</p>
+                <p><strong>Model:</strong> <span className={`model-badge ${prompt.model_type}`}>{prompt.model_type}</span></p>
+                <p><strong>Description:</strong> {prompt.description}</p>
+                <p><strong>Variables:</strong> {prompt.input_variables?.join(', ')}</p>
+                <button 
+                  onClick={() => setSelectedPrompt(prompt)}
+                  className="view-prompt-btn"
+                >
+                  View/Edit
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {selectedPrompt && (
+          <div className="prompt-editor">
+            <div className="editor-header">
+              <h3>Editing: {selectedPrompt.name}</h3>
+              <span className="version-badge">v{selectedPrompt.version}</span>
+            </div>
+            
+            <div className="editor-info">
+              <p><strong>Model:</strong> {selectedPrompt.model_type}</p>
+              <p><strong>Variables:</strong> {selectedPrompt.input_variables?.map(v => `{${v}}`).join(', ')}</p>
+            </div>
+            
+            <textarea
+              value={selectedPrompt.template_text}
+              onChange={(e) => setSelectedPrompt({
+                ...selectedPrompt,
+                template_text: e.target.value
+              })}
+              rows="20"
+              className="prompt-textarea"
+              placeholder="Enter your prompt template here..."
+            />
+            
+            {saveMessage && (
+              <div className={`save-message ${saveMessage.startsWith('✅') ? 'success' : 'error'}`}>
+                {saveMessage}
+              </div>
+            )}
+            
+            <div className="prompt-actions">
+              <button 
+                className="save-btn"
+                onClick={handleSavePrompt}
+                disabled={isSaving}
+              >
+                {isSaving ? '💾 Saving...' : '💾 Save New Version'}
+              </button>
+              <button 
+                className="cancel-btn"
+                onClick={() => {
+                  setSelectedPrompt(null);
+                  setSaveMessage('');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Navigation
   const Navigation = () => (

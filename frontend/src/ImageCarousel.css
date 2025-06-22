@@ -1,0 +1,151 @@
+.image-carousel {
+  background-color: #f8f9fa;
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.carousel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.carousel-header h5 {
+  margin: 0;
+  color: #333;
+  font-size: 1.1rem;
+}
+
+.image-counter {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.carousel-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.carousel-button {
+  background: #007bff;
+  color: white;
+  border: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.carousel-button:hover:not(:disabled) {
+  background: #0056b3;
+  transform: scale(1.1);
+}
+
+.carousel-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.carousel-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.image-wrapper {
+  width: 100%;
+  max-height: 400px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.image-wrapper img {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+}
+
+.image-details {
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.figure-number {
+  font-weight: bold;
+  color: #007bff;
+  margin-bottom: 8px;
+}
+
+.image-caption {
+  color: #333;
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.relevance-score {
+  color: #28a745;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.carousel-indicators {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 15px;
+}
+
+.indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: none;
+  background: #ccc;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.indicator.active {
+  background: #007bff;
+  width: 12px;
+  height: 12px;
+}
+
+.indicator:hover {
+  background: #999;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .carousel-container {
+    flex-direction: column;
+  }
+  
+  .carousel-button {
+    width: 35px;
+    height: 35px;
+    font-size: 20px;
+  }
+  
+  .image-wrapper {
+    max-height: 300px;
+  }
+}

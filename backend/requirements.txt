@@ -1,81 +1,88 @@
-# Updated requirements with latest LangChain and LangSmith
+# Updated requirements with compatible versions
 # Core LangChain and LangSmith
-langchain==0.1.0
-langchain-community==0.0.10
-langchain-core==0.1.0
-langchain-anthropic==0.1.0
-langchain-mistralai==0.0.1
-langsmith==0.0.70
+langchain
+langchain-community
+langchain-core
+langchain-anthropic
+langchain-mistralai
+langchain-deepseek
+langsmith
 
 # Web Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
 
 # AI and ML Models
-anthropic==0.8.1
-mistralai==0.0.12
-openai==1.3.0
-tiktoken==0.5.2
+anthropic
+mistralai
+openai
+tiktoken
 
 # Document Processing
-pypdf==3.17.4
-beautifulsoup4==4.12.2
-html2text==2020.1.16
-python-multipart==0.0.6
+pypdf
+beautifulsoup4
+html2text
+python-multipart
 
 # Search and Web
-requests==2.31.0
-aiohttp==3.9.1
-httpx==0.25.2
+requests
+aiohttp
+httpx
 
 # Database
-motor==3.3.2
-pymongo==4.6.0
+motor
+pymongo
 
 # Caching
-redis==5.0.1
-aioredis==2.0.1
+redis
+aioredis
 
 # Security and Auth
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.1.2
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
 
 # Data Processing
-pandas==2.1.4
-numpy==1.24.3
+pandas
+numpy
 
 # Environment and Config
-python-dotenv==1.0.0
+python-dotenv
 
 # Monitoring and Logging
-structlog==23.2.0
-rich==13.7.0
+structlog
+rich
 
 # Development and Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
+pytest
+pytest-asyncio
+pytest-cov
 
 # Vector Store and Embeddings
-chromadb==0.4.18
-sentence-transformers==2.2.2
+chromadb
+sentence-transformers
 
 # Text Processing
-nltk==3.8.1
-spacy==3.7.2
+nltk
+spacy
 
 # Async utilities
-asyncio-mqtt==0.16.1
+asyncio-mqtt
 
 # Production server
-gunicorn==21.2.0
+gunicorn
 
 # File handling
-aiofiles==23.2.1
+aiofiles
 
 # JSON handling
-orjson==3.9.10
+orjson
 
+# Image extraction and processing
+beautifulsoup4
+html5lib
+lxml
+pypdf2
+pillow

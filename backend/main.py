@@ -1,9 +1,6 @@
 """
 Advanced Radiology AI System - LangChain + LangSmith
-Local Development with Multi-Model Architecture
-
-This system implements a sophisticated multi-agent architecture for radiology case analysis
-with complete LangSmith observability and LangChain Studio integration.
+Version with full Prompt Manager integration
 """
 
 import os
@@ -28,8 +25,8 @@ from langchain_core.language_models import BaseLanguageModel
 
 # LangChain Model Integrations
 from langchain_anthropic import ChatAnthropic
-from langchain_community.llms import DeepSeek
 from langchain_mistralai import ChatMistralAI
+from langchain_deepseek import ChatDeepSeek
 
 # LangChain Tools and Utilities
 from langchain_community.tools import BraveSearch
@@ -39,19 +36,24 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # LangSmith Integration
-from langsmith import Client, traceable, evaluate
-from langsmith.evaluation import LangChainStringEvaluator
+from langsmith import Client
 from langsmith.schemas import Run, Example
+from langchain.callbacks.tracers import LangChainTracer
 
 # Database and Storage
 from motor.motor_asyncio import AsyncIOMotorClient
 import pymongo
+from bson import ObjectId
+from bson.json_util import dumps, loads
 
 # Web Framework
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
+
+# Import enhanced literature search
+from enhanced_literature_search import EnhancedLiteratureSearchAgent, EnhancedLiteratureMatch, ExtractedImage
 
 # Configure structured logging
 logger = structlog.get_logger()
@@ -90,54 +92,87 @@ class Settings(BaseSettings):
 # Initialize settings
 settings = Settings()
 
-# Configure LangSmith
-os.environ["LANGCHAIN_TRACING_V2"] = str(settings.langchain_tracing_v2)
+# Configure LangSmith - MUST be done before any LangChain imports
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = settings.langchain_api_key
 os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
+os.environ["LANGCHAIN_ENDPOINT"] = settings.langchain_endpoint
 
-# Initialize LangSmith client
+# Initialize LangSmith client and tracer
 langsmith_client = Client(
     api_url=settings.langchain_endpoint,
     api_key=settings.langchain_api_key
 )
 
-class RadiologyContext(BaseModel):
-    """Structured radiology context extracted from clinical description"""
-    anatomy: List[str] = Field(default_factory=list, description="Anatomical structures mentioned")
+# Create global tracer for callbacks
+langsmith_tracer = LangChainTracer(
+    project_name=settings.langchain_project,
+    client=langsmith_client
+)
+
+# Pydantic Models
+class ClinicalCase(BaseModel):
+    """Input model for radiology case analysis"""
+    case_id: str = Field(..., description="Unique case identifier")
+    patient_age: int = Field(..., ge=0, le=150, description="Patient age in years")
+    patient_sex: str = Field(..., description="Patient sex", pattern="^(Male|Female|Other)$")
+    clinical_history: str = Field(..., description="Clinical history and presentation")
     imaging_modality: str = Field(..., description="Primary imaging modality")
-    sequences: List[str] = Field(default_factory=list, description="Imaging sequences/protocols")
-    measurements: Dict[str, str] = Field(default_factory=dict, description="Size measurements")
-    morphology: List[str] = Field(default_factory=list, description="Shape and morphological features")
-    location: Dict[str, str] = Field(default_factory=dict, description="Anatomical location details")
+    anatomical_region: str = Field(..., description="Anatomical region of interest")
+    image_description: str = Field(..., description="Detailed imaging findings")
+    
+    @validator('imaging_modality')
+    def validate_modality(cls, v):
+        valid_modalities = ['MRI', 'CT', 'X-ray', 'Ultrasound', 'PET', 'Nuclear Medicine']
+        if v not in valid_modalities:
+            raise ValueError(f"Invalid modality. Must be one of: {valid_modalities}")
+        return v
+
+class RadiologyContext(BaseModel):
+    """Extracted radiology context from case"""
+    anatomy: List[str] = Field(..., description="Anatomical structures involved")
+    imaging_modality: str = Field(..., description="Imaging modality used")
+    sequences: List[str] = Field(default_factory=list, description="Imaging sequences (MRI)")
+    measurements: Dict[str, str] = Field(default_factory=dict, description="Key measurements")
+    morphology: List[str] = Field(default_factory=list, description="Morphological features")
+    location: Dict[str, str] = Field(default_factory=dict, description="Location descriptors")
     signal_characteristics: List[str] = Field(default_factory=list, description="Signal/density characteristics")
     enhancement_pattern: List[str] = Field(default_factory=list, description="Enhancement patterns")
     associated_findings: List[str] = Field(default_factory=list, description="Associated findings")
-    clinical_context: str = Field(..., description="Clinical presentation summary")
+    clinical_context: str = Field(..., description="Relevant clinical context")
 
-class ClinicalCase(BaseModel):
-    """Complete clinical case representation"""
-    case_id: str = Field(..., description="Unique case identifier")
-    patient_age: int = Field(..., description="Patient age in years")
-    patient_sex: str = Field(..., description="Patient biological sex")
-    clinical_history: str = Field(..., description="Clinical history and symptoms")
-    imaging_modality: str = Field(..., description="Type of imaging study")
-    anatomical_region: str = Field(..., description="Anatomical region imaged")
-    image_description: str = Field(..., description="Detailed imaging findings")
-    radiology_context: Optional[RadiologyContext] = Field(None, description="Extracted radiology context")
-    
-class LiteratureMatch(BaseModel):
-    """Medical literature match with relevance scoring"""
-    title: str = Field(..., description="Paper title")
-    authors: List[str] = Field(default_factory=list, description="Authors")
-    journal: str = Field(..., description="Publication journal")
-    year: int = Field(..., description="Publication year")
-    doi: Optional[str] = Field(None, description="DOI if available")
-    url: str = Field(..., description="Access URL")
-    abstract: str = Field(..., description="Paper abstract")
-    relevant_sections: List[str] = Field(default_factory=list, description="Relevant text sections")
-    image_descriptions: List[str] = Field(default_factory=list, description="Extracted image descriptions")
-    relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
-    match_reasoning: str = Field(..., description="Why this paper is relevant")
+class Diagnosis(BaseModel):
+    """Single diagnosis with reasoning"""
+    diagnosis: str = Field(..., description="Diagnostic entity")
+    confidence_score: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    reasoning: str = Field(..., description="Clinical reasoning")
+    icd_code: Optional[str] = Field(None, description="ICD-10 code if applicable")
+    supporting_evidence: Optional[str] = Field(None, description="Supporting evidence from literature")
+    imaging_features: Optional[str] = Field(None, description="Key imaging features")
+
+class DifferentialDiagnosis(BaseModel):
+    """Differential diagnosis entry"""
+    diagnosis: str = Field(..., description="Diagnostic entity")
+    probability: float = Field(..., ge=0.0, le=1.0, description="Probability score")
+    reasoning: str = Field(..., description="Why this is considered")
+    distinguishing_features: Optional[str] = Field(None, description="Features that would distinguish this diagnosis")
+    additional_workup: Optional[str] = Field(None, description="Additional tests needed")
+
+class ConfidenceAssessment(BaseModel):
+    """Overall confidence assessment"""
+    overall_confidence: float = Field(..., ge=0.0, le=1.0)
+    evidence_quality: str = Field(..., description="Quality of evidence")
+    clinical_correlation: str = Field(..., description="Clinical correlation assessment")
+    diagnostic_certainty: float = Field(..., ge=0.0, le=1.0)
+    recommendation: str = Field(..., description="Next steps recommendation")
+    limitations: Optional[str] = Field(None, description="Limitations of the analysis")
+
+class DiagnosisResult(BaseModel):
+    """Complete diagnosis result"""
+    primary_diagnosis: Diagnosis
+    differential_diagnoses: List[DifferentialDiagnosis]
+    confidence_assessment: ConfidenceAssessment
+    literature_support: str = Field(..., description="Summary of literature support")
 
 class PromptTemplate(BaseModel):
     """Dynamic prompt template with versioning"""
@@ -175,6 +210,10 @@ class PromptManager:
         if not prompt_doc:
             raise ValueError(f"Prompt template {template_id} not found")
             
+        # Remove _id field to avoid ObjectId serialization issues
+        if '_id' in prompt_doc:
+            del prompt_doc['_id']
+            
         return PromptTemplate(**prompt_doc)
     
     async def save_prompt(self, prompt: PromptTemplate) -> str:
@@ -187,731 +226,459 @@ class PromptManager:
         )
         return str(result.upserted_id) if result.upserted_id else prompt.template_id
     
-    async def create_prompt_version(self, template_id: str, new_template_text: str, 
-                                  description: str = "Updated version") -> PromptTemplate:
-        """Create new version of existing prompt"""
-        latest = await self.get_prompt(template_id)
-        
-        # Increment version
-        version_parts = latest.version.split(".")
-        version_parts[-1] = str(int(version_parts[-1]) + 1)
-        new_version = ".".join(version_parts)
-        
-        new_prompt = PromptTemplate(
-            template_id=template_id,
-            name=latest.name,
-            version=new_version,
-            description=description,
-            template_text=new_template_text,
-            input_variables=latest.input_variables,
-            model_type=latest.model_type
-        )
-        
-        await self.save_prompt(new_prompt)
-        return new_prompt
+    async def list_prompts(self) -> List[PromptTemplate]:
+        """List all available prompts"""
+        prompts = []
+        async for doc in self.collection.find():
+            if '_id' in doc:
+                del doc['_id']
+            prompts.append(PromptTemplate(**doc))
+        return prompts
 
 class MultiModelOrchestrator:
-    """Orchestrates multiple AI models for specialized tasks"""
+    """Orchestrates multiple models for different tasks"""
     
     def __init__(self, prompt_manager: PromptManager):
         self.prompt_manager = prompt_manager
         
-        # Initialize models
+        # Initialize models with callbacks
         self.claude = ChatAnthropic(
             model="claude-3-sonnet-20240229",
             api_key=settings.anthropic_api_key,
             temperature=0.1,
-            max_tokens=4000
+            max_tokens=4000,
+            callbacks=[langsmith_tracer]
         )
         
         self.mistral = ChatMistralAI(
             model="mistral-large-latest",
             api_key=settings.mistral_api_key,
-            temperature=0.1,
-            max_tokens=4000
+            temperature=0.2,
+            max_tokens=4000,
+            callbacks=[langsmith_tracer]
         )
         
-        # Note: DeepSeek integration may need adjustment based on current API
-        self.deepseek = ChatAnthropic(  # Fallback to Claude for now
-            model="claude-3-sonnet-20240229",
-            api_key=settings.anthropic_api_key,
-            temperature=0.1,
-            max_tokens=4000
+        self.deepseek = ChatDeepSeek(
+            model="deepseek-chat",
+            api_key=settings.deepseek_api_key,
+            api_base="https://api.deepseek.com/v1",
+            temperature=0.3,
+            callbacks=[langsmith_tracer]
         )
         
-        logger.info("MultiModelOrchestrator initialized with all models")
-    
-    async def get_model_for_task(self, task_type: str) -> BaseLanguageModel:
-        """Select optimal model for specific task"""
-        model_mapping = {
-            "radiology_extraction": self.claude,  # Best for medical reasoning
-            "document_processing": self.mistral,  # Good for document analysis
-            "search_optimization": self.deepseek,  # Good for code/optimization
-            "diagnosis_generation": self.claude,  # Best for medical diagnosis
-            "literature_analysis": self.claude,   # Best for medical analysis
-            "synthesis": self.claude              # Best for complex reasoning
+        logger.info("Initialized all models with LangSmith tracing")
+        
+    def select_model(self, task_type: str) -> BaseLanguageModel:
+        """Select appropriate model based on task"""
+        model_selection = {
+            "medical_reasoning": self.claude,
+            "document_processing": self.mistral,
+            "search_optimization": self.deepseek,
+            "diagnosis": self.claude,
+            "context_extraction": self.claude
         }
-        
-        return model_mapping.get(task_type, self.claude)
+        return model_selection.get(task_type, self.claude)
 
 class RadiologyContextExtractor:
-    """Specialized agent for extracting structured radiology context"""
+    """Extracts structured radiology context from cases"""
     
-    def __init__(self, orchestrator: MultiModelOrchestrator, prompt_manager: PromptManager):
+    def __init__(self, orchestrator: MultiModelOrchestrator):
         self.orchestrator = orchestrator
-        self.prompt_manager = prompt_manager
         
-    @traceable(name="radiology_context_extraction")
     async def extract_context(self, case: ClinicalCase) -> RadiologyContext:
-        """Extract structured radiology context from clinical case"""
+        """Extract structured radiology context"""
         
-        # Get dynamic prompt
-        prompt_template = await self.prompt_manager.get_prompt("radiology_context_extractor")
+        run_name = f"radiology_context_extraction_{case.case_id}"
         
-        # Get optimal model for this task
-        model = await self.orchestrator.get_model_for_task("radiology_extraction")
+        model = self.orchestrator.select_model("context_extraction")
         
-        # Create prompt with case data
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
+        # Get prompt from prompt manager
+        try:
+            prompt_template = await self.orchestrator.prompt_manager.get_prompt("radiology_context_extraction")
+            system_msg = prompt_template.template_text
+        except:
+            # Fallback to default prompt
+            system_msg = """You are an expert radiologist. Extract structured information from the case.
+            Focus on anatomical structures, imaging characteristics, and clinically relevant features.
+            Be specific and comprehensive."""
         
-        # Setup output parser
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_msg),
+            ("human", "Process this case: {input}")
+        ])
+        
         parser = PydanticOutputParser(pydantic_object=RadiologyContext)
         
-        # Create chain
         chain = prompt | model | parser
         
         try:
-            result = await chain.ainvoke({
-                "patient_age": case.patient_age,
-                "patient_sex": case.patient_sex,
+            # Format the input based on prompt template variables
+            input_data = {
+                "age": case.patient_age,
+                "sex": case.patient_sex,
                 "clinical_history": case.clinical_history,
                 "imaging_modality": case.imaging_modality,
                 "anatomical_region": case.anatomical_region,
-                "image_description": case.image_description,
-                "format_instructions": parser.get_format_instructions()
-            })
+                "image_description": case.image_description
+            }
             
-            logger.info("Radiology context extracted successfully", 
-                       case_id=case.case_id,
-                       anatomy_count=len(result.anatomy),
-                       findings_count=len(result.associated_findings))
+            # Create formatted input
+            formatted_input = system_msg.format(**input_data)
+            
+            result = await chain.ainvoke({
+                "input": formatted_input
+            }, config={"run_name": run_name, "callbacks": [langsmith_tracer]})
             
             return result
-            
         except Exception as e:
-            logger.error("Error extracting radiology context", 
-                        case_id=case.case_id, error=str(e))
-            
-            # Return basic context as fallback
+            logger.error(f"Context extraction failed: {e}")
+            # Return a basic context as fallback
             return RadiologyContext(
                 anatomy=[case.anatomical_region],
                 imaging_modality=case.imaging_modality,
                 clinical_context=case.clinical_history
             )
 
-class LiteratureSearchAgent:
-    """Advanced literature search with document processing"""
+class EnhancedLiteratureSearchAgentWithPrompts(EnhancedLiteratureSearchAgent):
+    """Enhanced literature search agent that uses prompt manager"""
     
-    def __init__(self, orchestrator: MultiModelOrchestrator, prompt_manager: PromptManager):
-        self.orchestrator = orchestrator
+    def __init__(self, deepseek_model, mistral_model, claude_model, brave_api_key: str, langsmith_tracer, prompt_manager):
+        super().__init__(deepseek_model, mistral_model, claude_model, brave_api_key, langsmith_tracer)
         self.prompt_manager = prompt_manager
-        self.search_tool = BraveSearch(
-            api_key=settings.brave_search_api_key,
-            search_kwargs={"count": 20}
-        )
         
-    @traceable(name="literature_search")
-    async def search_literature(self, radiology_context: RadiologyContext, 
-                              case: ClinicalCase) -> List[LiteratureMatch]:
-        """Search for relevant medical literature"""
+    async def _generate_image_focused_queries(self, context, run_name: str) -> List[str]:
+        """Generate search queries using prompt manager"""
         
-        # Generate optimized search queries
-        search_queries = await self._generate_search_queries(radiology_context, case)
+        # Get prompt from manager
+        try:
+            prompt_template = await self.prompt_manager.get_prompt("literature_search_query_generation")
+            template_text = prompt_template.template_text
+        except:
+            # Fallback to default
+            template_text = self.search_prompt.messages[1].prompt.template
         
-        # Execute searches
-        all_results = []
-        for query in search_queries:
-            results = await self._execute_search(query)
-            all_results.extend(results)
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a medical literature search specialist."),
+            ("human", template_text)
+        ])
         
-        # Process and analyze documents
-        processed_results = []
-        for result in all_results[:10]:  # Limit to top 10
-            processed = await self._process_document(result, radiology_context)
-            if processed:
-                processed_results.append(processed)
+        chain = prompt | self.deepseek | StrOutputParser()
         
-        # Rank by relevance
-        ranked_results = sorted(processed_results, 
-                              key=lambda x: x.relevance_score, reverse=True)
-        
-        logger.info("Literature search completed",
-                   case_id=case.case_id,
-                   queries_executed=len(search_queries),
-                   results_found=len(ranked_results))
-        
-        return ranked_results[:5]  # Return top 5
-    
-    @traceable(name="search_query_generation")
-    async def _generate_search_queries(self, context: RadiologyContext, 
-                                     case: ClinicalCase) -> List[str]:
-        """Generate optimized search queries"""
-        
-        prompt_template = await self.prompt_manager.get_prompt("search_query_generator")
-        model = await self.orchestrator.get_model_for_task("search_optimization")
-        
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        chain = prompt | model | StrOutputParser()
+        # Extract key features for search
+        features = []
+        if context.morphology:
+            features.extend(context.morphology)
+        if context.enhancement_pattern:
+            features.extend(context.enhancement_pattern)
+        if context.signal_characteristics:
+            features.extend(context.signal_characteristics)
         
         result = await chain.ainvoke({
             "anatomy": ", ".join(context.anatomy),
             "imaging_modality": context.imaging_modality,
-            "sequences": ", ".join(context.sequences),
-            "enhancement_pattern": ", ".join(context.enhancement_pattern),
+            "features": ", ".join(features),
             "clinical_context": context.clinical_context
-        })
+        }, config={"run_name": f"{run_name}_query_generation", "callbacks": [self.langsmith_tracer]})
         
-        # Parse queries from result
         queries = [q.strip() for q in result.split('\n') if q.strip()]
-        return queries[:5]  # Limit to 5 queries
+        return queries[:5]
     
-    async def _execute_search(self, query: str) -> List[Dict]:
-        """Execute search and return raw results"""
+    async def _score_images(self, images: List[Dict], context, run_name: str) -> List[ExtractedImage]:
+        """Score images using prompt manager"""
+        scored_images = []
+        
+        # Get prompt from manager
         try:
-            results = self.search_tool.run(query)
-            # Parse search results (implementation depends on Brave Search format)
-            return self._parse_search_results(results)
-        except Exception as e:
-            logger.error("Search execution failed", query=query, error=str(e))
-            return []
-    
-    def _parse_search_results(self, results: str) -> List[Dict]:
-        """Parse search results into structured format"""
-        # This is a simplified parser - you'd implement based on actual Brave Search format
-        parsed_results = []
+            prompt_template = await self.prompt_manager.get_prompt("image_relevance_scoring")
+            template_text = prompt_template.template_text
+        except:
+            template_text = self.image_relevance_prompt.messages[1].prompt.template
         
-        # Split results and extract basic info
-        lines = results.split('\n')
-        current_result = {}
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are a radiologist evaluating image relevance."),
+            ("human", template_text)
+        ])
         
-        for line in lines:
-            if line.startswith('Title:'):
-                if current_result:
-                    parsed_results.append(current_result)
-                current_result = {'title': line.replace('Title:', '').strip()}
-            elif line.startswith('URL:'):
-                current_result['url'] = line.replace('URL:', '').strip()
-            elif line.startswith('Description:'):
-                current_result['description'] = line.replace('Description:', '').strip()
-        
-        if current_result:
-            parsed_results.append(current_result)
+        for img in images:
+            if not img.get('url') or img['url'].startswith('pdf:'):
+                continue
             
-        return parsed_results
-    
-    @traceable(name="document_processing")
-    async def _process_document(self, search_result: Dict, 
-                              context: RadiologyContext) -> Optional[LiteratureMatch]:
-        """Process individual document and extract relevant information"""
-        
-        try:
-            # Load document content
-            if search_result.get('url', '').endswith('.pdf'):
-                loader = PyPDFLoader(search_result['url'])
-            else:
-                loader = WebBaseLoader(search_result['url'])
+            chain = prompt | self.claude | StrOutputParser()
             
-            docs = await asyncio.to_thread(loader.load)
-            
-            if not docs:
-                return None
-            
-            # Extract text content
-            full_text = '\n'.join([doc.page_content for doc in docs])
-            
-            # Analyze relevance using Mistral
-            relevance_analysis = await self._analyze_relevance(full_text, context)
-            
-            if relevance_analysis['relevance_score'] < 0.3:
-                return None
-            
-            # Extract image descriptions
-            image_descriptions = await self._extract_image_descriptions(full_text)
-            
-            return LiteratureMatch(
-                title=search_result.get('title', 'Unknown'),
-                authors=[],  # Would extract from document
-                journal='Unknown',  # Would extract from document
-                year=2024,  # Would extract from document
-                url=search_result.get('url', ''),
-                abstract=search_result.get('description', ''),
-                relevant_sections=relevance_analysis.get('relevant_sections', []),
-                image_descriptions=image_descriptions,
-                relevance_score=relevance_analysis['relevance_score'],
-                match_reasoning=relevance_analysis.get('reasoning', '')
-            )
-            
-        except Exception as e:
-            logger.error("Document processing failed", 
-                        url=search_result.get('url'), error=str(e))
-            return None
-    
-    @traceable(name="relevance_analysis")
-    async def _analyze_relevance(self, document_text: str, 
-                               context: RadiologyContext) -> Dict:
-        """Analyze document relevance to radiology context"""
+            try:
+                score_str = await chain.ainvoke({
+                    "anatomy": ", ".join(context.anatomy),
+                    "modality": context.imaging_modality,
+                    "features": ", ".join(context.morphology + context.enhancement_pattern),
+                    "caption": img.get('caption', ''),
+                    "context": img.get('alt_text', '')
+                }, config={"run_name": f"{run_name}_image_scoring", "callbacks": [self.langsmith_tracer]})
+                
+                relevance_score = float(score_str.strip())
+                
+                if relevance_score > 0.5:
+                    scored_images.append(ExtractedImage(
+                        url=img['url'],
+                        caption=img.get('caption', ''),
+                        figure_number=img.get('figure_number'),
+                        relevance_score=relevance_score,
+                        alt_text=img.get('alt_text')
+                    ))
+                    
+            except Exception as e:
+                logger.error(f"Failed to score image: {e}")
+                continue
         
-        prompt_template = await self.prompt_manager.get_prompt("relevance_analyzer")
-        model = await self.orchestrator.get_model_for_task("literature_analysis")
-        
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        parser = JsonOutputParser()
-        
-        chain = prompt | model | parser
-        
-        result = await chain.ainvoke({
-            "document_text": document_text[:5000],  # Limit text length
-            "anatomy": ", ".join(context.anatomy),
-            "imaging_modality": context.imaging_modality,
-            "clinical_context": context.clinical_context,
-            "format_instructions": parser.get_format_instructions()
-        })
-        
-        return result
-    
-    @traceable(name="image_description_extraction")
-    async def _extract_image_descriptions(self, document_text: str) -> List[str]:
-        """Extract image descriptions and captions from document text"""
-        
-        prompt_template = await self.prompt_manager.get_prompt("image_description_extractor")
-        model = await self.orchestrator.get_model_for_task("document_processing")
-        
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        chain = prompt | model | StrOutputParser()
-        
-        result = await chain.ainvoke({
-            "document_text": document_text
-        })
-        
-        # Parse extracted descriptions
-        descriptions = [desc.strip() for desc in result.split('\n') if desc.strip()]
-        return descriptions
+        return sorted(scored_images, key=lambda x: x.relevance_score, reverse=True)[:5]
 
 class DiagnosisAgent:
-    """Advanced diagnosis generation with evidence synthesis"""
+    """Generates comprehensive diagnosis with differential"""
     
-    def __init__(self, orchestrator: MultiModelOrchestrator, prompt_manager: PromptManager):
+    def __init__(self, orchestrator: MultiModelOrchestrator):
         self.orchestrator = orchestrator
-        self.prompt_manager = prompt_manager
-    
-    @traceable(name="diagnosis_generation")
+        
     async def generate_diagnosis(self, case: ClinicalCase, 
                                radiology_context: RadiologyContext,
-                               literature_matches: List[LiteratureMatch]) -> Dict:
-        """Generate comprehensive diagnosis with evidence"""
+                               literature_matches: List[EnhancedLiteratureMatch]) -> DiagnosisResult:
+        """Generate comprehensive diagnosis"""
         
-        # Prepare literature evidence
-        literature_evidence = self._prepare_literature_evidence(literature_matches)
+        model = self.orchestrator.select_model("diagnosis")
+        
+        # Prepare literature summary including images
+        lit_summary = self._prepare_literature_summary(literature_matches)
         
         # Generate primary diagnosis
         primary_diagnosis = await self._generate_primary_diagnosis(
-            case, radiology_context, literature_evidence
+            case, radiology_context, lit_summary, model
         )
         
         # Generate differential diagnoses
-        differential_diagnoses = await self._generate_differential_diagnoses(
-            case, radiology_context, literature_evidence, primary_diagnosis
+        differentials = await self._generate_differential_diagnoses(
+            case, radiology_context, primary_diagnosis, model
         )
         
-        # Calculate confidence scores
-        confidence_assessment = await self._assess_confidence(
-            primary_diagnosis, differential_diagnoses, literature_evidence
+        # Assess confidence
+        confidence = await self._assess_confidence(
+            primary_diagnosis, differentials, literature_matches, model
         )
         
-        return {
-            "primary_diagnosis": primary_diagnosis,
-            "differential_diagnoses": differential_diagnoses,
-            "confidence_assessment": confidence_assessment,
-            "literature_support": literature_evidence
-        }
+        return DiagnosisResult(
+            primary_diagnosis=primary_diagnosis,
+            differential_diagnoses=differentials,
+            confidence_assessment=confidence,
+            literature_support=lit_summary
+        )
     
-    def _prepare_literature_evidence(self, matches: List[LiteratureMatch]) -> str:
-        """Prepare literature evidence for diagnosis"""
-        evidence_sections = []
+    def _prepare_literature_summary(self, matches: List[EnhancedLiteratureMatch]) -> str:
+        """Prepare literature summary including image references"""
+        if not matches:
+            return "No relevant literature found."
         
-        for match in matches:
-            evidence = f"Study: {match.title}\n"
-            evidence += f"Relevance: {match.relevance_score:.2f}\n"
-            evidence += f"Key findings: {match.match_reasoning}\n"
+        summary_parts = []
+        for i, match in enumerate(matches[:10], 1):
+            summary_parts.append(f"Study {i}: {match.title}")
+            summary_parts.append(f"Relevance: {match.relevance_score:.2f}")
+            summary_parts.append(f"Key findings: {match.match_reasoning}")
             
-            if match.image_descriptions:
-                evidence += f"Image descriptions: {'; '.join(match.image_descriptions[:3])}\n"
+            if match.extracted_images:
+                summary_parts.append(f"Images found: {len(match.extracted_images)} relevant figures")
+                for img in match.extracted_images[:2]:
+                    summary_parts.append(f"- {img.figure_number or 'Image'}: {img.caption[:100]}...")
             
-            evidence_sections.append(evidence)
+            summary_parts.append("")
         
-        return "\n---\n".join(evidence_sections)
+        return "\n".join(summary_parts)
     
-    @traceable(name="primary_diagnosis_generation")
-    async def _generate_primary_diagnosis(self, case: ClinicalCase,
-                                        context: RadiologyContext,
-                                        literature: str) -> Dict:
-        """Generate primary diagnosis with reasoning"""
+    async def _generate_primary_diagnosis(self, case, context, lit_summary, model) -> Diagnosis:
+        """Generate primary diagnosis using prompt manager"""
         
-        prompt_template = await self.prompt_manager.get_prompt("primary_diagnosis_generator")
-        model = await self.orchestrator.get_model_for_task("diagnosis_generation")
+        run_name = f"primary_diagnosis_generation_{case.case_id}"
         
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        parser = JsonOutputParser()
+        # Get prompt from manager
+        try:
+            prompt_template = await self.orchestrator.prompt_manager.get_prompt("primary_diagnosis_generation")
+            template_text = prompt_template.template_text
+        except:
+            template_text = """You are an expert radiologist providing a primary diagnosis.
+            Consider imaging findings, clinical context, and literature evidence.
+            Be specific and evidence-based.
+            
+            {template_text}"""
         
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert radiologist."),
+            ("human", template_text)
+        ])
+        
+        parser = PydanticOutputParser(pydantic_object=Diagnosis)
         chain = prompt | model | parser
         
         result = await chain.ainvoke({
-            "clinical_history": case.clinical_history,
-            "image_description": case.image_description,
-            "radiology_context": context.dict(),
-            "literature_evidence": literature,
-            "format_instructions": parser.get_format_instructions()
-        })
+            "clinical_context": f"{case.patient_age}yo {case.patient_sex}, {case.clinical_history}",
+            "radiology_findings": json.dumps(context.dict(), indent=2),
+            "literature_evidence": lit_summary
+        }, config={"run_name": run_name, "callbacks": [langsmith_tracer]})
         
         return result
     
-    @traceable(name="differential_diagnosis_generation")
-    async def _generate_differential_diagnoses(self, case: ClinicalCase,
-                                             context: RadiologyContext,
-                                             literature: str,
-                                             primary: Dict) -> List[Dict]:
-        """Generate differential diagnoses"""
+    async def _generate_differential_diagnoses(self, case, context, primary, model) -> List[DifferentialDiagnosis]:
+        """Generate differential diagnoses using prompt manager"""
         
-        prompt_template = await self.prompt_manager.get_prompt("differential_diagnosis_generator")
-        model = await self.orchestrator.get_model_for_task("diagnosis_generation")
+        run_name = f"differential_diagnosis_generation_{case.case_id}"
         
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        parser = JsonOutputParser()
+        # Get prompt from manager
+        try:
+            prompt_template = await self.orchestrator.prompt_manager.get_prompt("differential_diagnosis_generation")
+            template_text = prompt_template.template_text
+        except:
+            template_text = """You are an expert radiologist generating differential diagnoses.
+            {template_text}"""
         
-        chain = prompt | model | parser
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are an expert radiologist."),
+            ("human", template_text)
+        ])
         
-        result = await chain.ainvoke({
-            "clinical_history": case.clinical_history,
-            "image_description": case.image_description,
-            "radiology_context": context.dict(),
-            "primary_diagnosis": primary,
-            "literature_evidence": literature,
-            "format_instructions": parser.get_format_instructions()
-        })
+        result_text = await model.ainvoke(
+            prompt.format_messages(
+                primary_diagnosis=primary.diagnosis,
+                case_summary=f"{case.patient_age}yo {case.patient_sex}\n{context.clinical_context}\nKey findings: {', '.join(context.morphology)}"
+            ),
+            config={"run_name": run_name, "callbacks": [langsmith_tracer]}
+        )
         
-        return result.get("differential_diagnoses", [])
+        try:
+            diff_list = json.loads(result_text.content)
+            return [DifferentialDiagnosis(**d) for d in diff_list[:5]]
+        except:
+            return []
     
-    @traceable(name="confidence_assessment")
-    async def _assess_confidence(self, primary: Dict, differentials: List[Dict], 
-                               literature: str) -> Dict:
-        """Assess overall confidence in diagnosis"""
+    async def _assess_confidence(self, primary, differentials, literature, model) -> ConfidenceAssessment:
+        """Assess overall diagnostic confidence using prompt manager"""
         
-        prompt_template = await self.prompt_manager.get_prompt("confidence_assessor")
-        model = await self.orchestrator.get_model_for_task("diagnosis_generation")
+        # Get prompt from manager
+        try:
+            prompt_template = await self.orchestrator.prompt_manager.get_prompt("confidence_assessment")
+            template_text = prompt_template.template_text
+        except:
+            template_text = """Assess the overall confidence in the diagnosis.
+            {template_text}"""
         
-        prompt = ChatPromptTemplate.from_template(prompt_template.template_text)
-        parser = JsonOutputParser()
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", "You are assessing diagnostic confidence."),
+            ("human", template_text)
+        ])
         
+        parser = PydanticOutputParser(pydantic_object=ConfidenceAssessment)
         chain = prompt | model | parser
         
+        avg_relevance = sum(m.relevance_score for m in literature) / len(literature) if literature else 0
+        
         result = await chain.ainvoke({
-            "primary_diagnosis": primary,
-            "differential_diagnoses": differentials,
-            "literature_support": literature,
-            "format_instructions": parser.get_format_instructions()
-        })
+            "primary": f"{primary.diagnosis} (confidence: {primary.confidence_score})",
+            "differentials": ", ".join([d.diagnosis for d in differentials]),
+            "lit_count": len(literature),
+            "avg_relevance": f"{avg_relevance:.2f}"
+        }, config={"callbacks": [langsmith_tracer]})
         
         return result
 
 class RadiologyAISystem:
-    """Main system orchestrating all agents"""
+    """Main AI system orchestrating all agents"""
     
     def __init__(self):
-        # Initialize database connection
-        self.db_client = None
-        self.prompt_manager = None
-        self.orchestrator = None
-        self.context_extractor = None
-        self.literature_agent = None
-        self.diagnosis_agent = None
+        # Initialize database
+        self.db_client = AsyncIOMotorClient(settings.mongodb_url)
+        self.db = self.db_client[settings.database_name]
         
-    async def initialize(self):
-        """Initialize all system components"""
-        
-        # Connect to MongoDB
-        self.db_client = AsyncIOMotorClient(settings.mongodb_url)[settings.database_name]
-        
-        # Initialize components
-        self.prompt_manager = PromptManager(self.db_client)
+        # Initialize managers
+        self.prompt_manager = PromptManager(self.db)
         self.orchestrator = MultiModelOrchestrator(self.prompt_manager)
-        self.context_extractor = RadiologyContextExtractor(self.orchestrator, self.prompt_manager)
-        self.literature_agent = LiteratureSearchAgent(self.orchestrator, self.prompt_manager)
-        self.diagnosis_agent = DiagnosisAgent(self.orchestrator, self.prompt_manager)
         
-        # Initialize default prompts
-        await self._initialize_default_prompts()
+        # Initialize agents
+        self.context_extractor = RadiologyContextExtractor(self.orchestrator)
         
-        logger.info("RadiologyAISystem initialized successfully")
-    
-    async def _initialize_default_prompts(self):
-        """Initialize default prompt templates"""
+        # Initialize enhanced literature search with prompt manager
+        self.literature_agent = EnhancedLiteratureSearchAgentWithPrompts(
+            deepseek_model=self.orchestrator.deepseek,
+            mistral_model=self.orchestrator.mistral,
+            claude_model=self.orchestrator.claude,
+            brave_api_key=settings.brave_search_api_key,
+            langsmith_tracer=langsmith_tracer,
+            prompt_manager=self.prompt_manager
+        )
         
-        default_prompts = [
-            PromptTemplate(
-                template_id="radiology_context_extractor",
-                name="Radiology Context Extractor",
-                version="1.0",
-                description="Extracts structured radiology context from clinical descriptions",
-                template_text="""You are an expert radiologist analyzing clinical cases. Extract structured radiology context from the following case:
-
-Patient: {patient_age} year old {patient_sex}
-Clinical History: {clinical_history}
-Imaging: {imaging_modality} of {anatomical_region}
-Findings: {image_description}
-
-Extract the following structured information:
-{format_instructions}
-
-Focus on:
-- Anatomical structures mentioned
-- Imaging sequences and protocols
-- Measurements and dimensions
-- Morphological characteristics
-- Enhancement patterns
-- Signal/density characteristics
-- Associated findings
-- Clinical context summary
-
-Be precise and use standard radiological terminology.""",
-                input_variables=["patient_age", "patient_sex", "clinical_history", "imaging_modality", "anatomical_region", "image_description", "format_instructions"],
-                model_type="claude"
-            ),
-            
-            PromptTemplate(
-                template_id="search_query_generator",
-                name="Search Query Generator",
-                version="1.0",
-                description="Generates optimized search queries for medical literature",
-                template_text="""Generate 5 optimized search queries for finding relevant medical literature based on this radiology case:
-
-Anatomy: {anatomy}
-Imaging Modality: {imaging_modality}
-Sequences: {sequences}
-Enhancement Pattern: {enhancement_pattern}
-Clinical Context: {clinical_context}
-
-Create targeted search queries that will find:
-1. Diagnostic imaging papers
-2. Case reports with similar findings
-3. Systematic reviews and meta-analyses
-4. Recent research on this condition
-5. Imaging technique papers
-
-Format each query on a new line. Use medical terminology and include imaging modality.""",
-                input_variables=["anatomy", "imaging_modality", "sequences", "enhancement_pattern", "clinical_context"],
-                model_type="deepseek"
-            ),
-            
-            PromptTemplate(
-                template_id="relevance_analyzer",
-                name="Document Relevance Analyzer",
-                version="1.0",
-                description="Analyzes document relevance to radiology case",
-                template_text="""Analyze the relevance of this medical document to the radiology case:
-
-Document Text (excerpt): {document_text}
-
-Case Context:
-- Anatomy: {anatomy}
-- Imaging Modality: {imaging_modality}
-- Clinical Context: {clinical_context}
-
-Provide analysis in JSON format:
-{format_instructions}
-
-Include:
-- relevance_score (0.0-1.0)
-- reasoning (why relevant/not relevant)
-- relevant_sections (list of relevant text excerpts)
-- key_findings (important medical findings mentioned)""",
-                input_variables=["document_text", "anatomy", "imaging_modality", "clinical_context", "format_instructions"],
-                model_type="claude"
-            ),
-            
-            PromptTemplate(
-                template_id="image_description_extractor",
-                name="Image Description Extractor",
-                version="1.0",
-                description="Extracts image descriptions and captions from medical documents",
-                template_text="""Extract all image descriptions, figure captions, and imaging findings from this medical document:
-
-Document Text: {document_text}
-
-Find and extract:
-- Figure captions (Figure 1, Fig. 2, etc.)
-- Image descriptions in text
-- Radiological findings descriptions
-- Imaging technique descriptions
-
-Return each description on a new line. Focus on descriptions that include:
-- Imaging modality
-- Anatomical structures
-- Pathological findings
-- Enhancement patterns
-- Measurements""",
-                input_variables=["document_text"],
-                model_type="mistral"
-            ),
-            
-            PromptTemplate(
-                template_id="primary_diagnosis_generator",
-                name="Primary Diagnosis Generator",
-                version="1.0",
-                description="Generates primary diagnosis with medical reasoning",
-                template_text="""Generate the most likely primary diagnosis for this radiology case:
-
-Clinical History: {clinical_history}
-Imaging Findings: {image_description}
-Radiology Context: {radiology_context}
-Literature Evidence: {literature_evidence}
-
-Provide diagnosis in JSON format:
-{format_instructions}
-
-Include:
-- diagnosis (primary diagnosis name)
-- confidence_score (0.0-1.0)
-- reasoning (detailed medical reasoning)
-- icd_code (if applicable)
-- supporting_evidence (key evidence from literature)
-- imaging_features (key imaging characteristics)
-
-Use evidence-based medicine principles and current medical guidelines.""",
-                input_variables=["clinical_history", "image_description", "radiology_context", "literature_evidence", "format_instructions"],
-                model_type="claude"
-            ),
-            
-            PromptTemplate(
-                template_id="differential_diagnosis_generator",
-                name="Differential Diagnosis Generator",
-                version="1.0",
-                description="Generates differential diagnoses with ranking",
-                template_text="""Generate a ranked list of differential diagnoses for this case:
-
-Clinical History: {clinical_history}
-Imaging Findings: {image_description}
-Radiology Context: {radiology_context}
-Primary Diagnosis: {primary_diagnosis}
-Literature Evidence: {literature_evidence}
-
-Provide differential diagnoses in JSON format:
-{format_instructions}
-
-For each differential diagnosis include:
-- diagnosis (name)
-- probability (0.0-1.0)
-- reasoning (why this diagnosis is considered)
-- distinguishing_features (how to differentiate from primary)
-- additional_workup (what tests would help confirm/exclude)
-
-Rank by likelihood and clinical importance.""",
-                input_variables=["clinical_history", "image_description", "radiology_context", "primary_diagnosis", "literature_evidence", "format_instructions"],
-                model_type="claude"
-            ),
-            
-            PromptTemplate(
-                template_id="confidence_assessor",
-                name="Confidence Assessor",
-                version="1.0",
-                description="Assesses confidence in diagnosis based on available evidence",
-                template_text="""Assess the overall confidence in this diagnostic assessment:
-
-Primary Diagnosis: {primary_diagnosis}
-Differential Diagnoses: {differential_diagnoses}
-Literature Support: {literature_support}
-
-Provide confidence assessment in JSON format:
-{format_instructions}
-
-Include:
-- overall_confidence (0.0-1.0)
-- evidence_quality (assessment of literature quality)
-- clinical_correlation (how well imaging matches clinical presentation)
-- diagnostic_certainty (confidence in primary diagnosis)
-- recommendation (next steps or additional workup needed)
-- limitations (what factors limit diagnostic confidence)
-
-Consider imaging quality, clinical correlation, and literature support.""",
-                input_variables=["primary_diagnosis", "differential_diagnoses", "literature_support", "format_instructions"],
-                model_type="claude"
-            )
-        ]
+        self.diagnosis_agent = DiagnosisAgent(self.orchestrator)
         
-        # Save default prompts to database
-        for prompt in default_prompts:
-            try:
-                await self.prompt_manager.save_prompt(prompt)
-                logger.info(f"Initialized prompt: {prompt.template_id}")
-            except Exception as e:
-                logger.error(f"Failed to initialize prompt {prompt.template_id}: {e}")
-    
-    @traceable(name="full_case_analysis")
+        logger.info("Initialized RadiologyAISystem with Prompt Manager integration")
+        
     async def analyze_case(self, case: ClinicalCase) -> Dict:
         """Complete case analysis pipeline"""
         
-        logger.info("Starting full case analysis", case_id=case.case_id)
+        run_name = f"full_case_analysis_{case.case_id}"
         
         try:
-            # Step 1: Extract radiology context
+            # Extract radiology context
+            logger.info(f"Starting analysis for case {case.case_id}")
             radiology_context = await self.context_extractor.extract_context(case)
-            case.radiology_context = radiology_context
+            logger.info(f"Extracted radiology context with {len(radiology_context.anatomy)} anatomical structures")
             
-            # Step 2: Search literature
-            literature_matches = await self.literature_agent.search_literature(
-                radiology_context, case
-            )
+            # Search literature with enhanced image extraction
+            try:
+                literature_matches = await self.literature_agent.search_literature_with_images(
+                    radiology_context, case, max_papers=10
+                )
+                logger.info(f"Found {len(literature_matches)} relevant papers with images")
+            except Exception as e:
+                logger.error(f"Literature search failed: {e}")
+                literature_matches = []
             
-            # Step 3: Generate diagnosis
+            # Generate comprehensive diagnosis
             diagnosis_result = await self.diagnosis_agent.generate_diagnosis(
                 case, radiology_context, literature_matches
             )
             
-            # Step 4: Compile final result
-            final_result = {
+            # Store in database
+            result_doc = {
+                "case_id": case.case_id,
+                "timestamp": datetime.now(),
+                "radiology_context": radiology_context.dict(),
+                "literature_matches": [match.dict() for match in literature_matches],
+                "diagnosis_result": diagnosis_result.dict(),
+                "langsmith_run_id": run_name
+            }
+            
+            await self.db.analyses.insert_one(result_doc)
+            
+            # Prepare response with enhanced literature data
+            response = {
                 "case_id": case.case_id,
                 "radiology_context": radiology_context.dict(),
                 "literature_matches": [match.dict() for match in literature_matches],
-                "diagnosis_result": diagnosis_result,
+                "diagnosis_result": diagnosis_result.dict(),
                 "processing_metadata": {
                     "timestamp": datetime.now().isoformat(),
                     "models_used": ["claude", "mistral", "deepseek"],
                     "literature_sources": len(literature_matches),
+                    "images_extracted": sum(len(m.extracted_images) for m in literature_matches),
                     "langsmith_project": settings.langchain_project
                 }
             }
             
-            logger.info("Case analysis completed successfully",
-                       case_id=case.case_id,
-                       primary_diagnosis=diagnosis_result.get("primary_diagnosis", {}).get("diagnosis"),
-                       literature_count=len(literature_matches))
-            
-            return final_result
+            return response
             
         except Exception as e:
-            logger.error("Case analysis failed", case_id=case.case_id, error=str(e))
-            raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-
-# Initialize the system
-radiology_system = RadiologyAISystem()
+            logger.error(f"Case analysis failed: {e}", exc_info=True)
+            raise
 
 # FastAPI Application
 app = FastAPI(
-    title="Radiology AI System - LangChain + LangSmith",
-    description="Advanced multi-agent radiology case analysis with complete observability",
-    version="2.0.0"
+    title="Radiology AI System - With Prompt Manager",
+    description="Advanced radiology analysis with full prompt management capabilities",
+    version="3.0.0"
 )
 
-# CORS configuration
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -920,74 +687,156 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize system
+radiology_system = None
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize system on startup"""
-    await radiology_system.initialize()
-    logger.info("Radiology AI System started successfully")
+    global radiology_system
+    radiology_system = RadiologyAISystem()
+    logger.info("Radiology AI System started with Prompt Manager")
+
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "name": "Radiology AI System - With Prompt Manager",
+        "version": "3.0.0",
+        "features": [
+            "Multi-model orchestration (Claude, Mistral, DeepSeek)",
+            "Enhanced literature search with image extraction",
+            "Full LangSmith observability",
+            "Dynamic prompt management with UI editing",
+            "Comprehensive diagnosis generation"
+        ],
+        "endpoints": {
+            "health": "/health",
+            "analyze": "/api/analyze-case",
+            "prompts": "/api/prompts",
+            "prompt_detail": "/api/prompts/{template_id}"
+        }
+    }
 
 @app.get("/health")
 async def health_check():
-    """Health check with system status"""
+    """System health check"""
+    try:
+        # Check database connection
+        await radiology_system.db.command("ping")
+        db_status = True
+    except:
+        db_status = False
+    
+    # Count available prompts
+    prompt_count = await radiology_system.db.prompts.count_documents({})
+    
     return {
-        "status": "healthy",
-        "system": "radiology-ai-langchain",
-        "langsmith_enabled": settings.langchain_tracing_v2,
+        "status": "healthy" if db_status else "degraded",
+        "timestamp": datetime.now().isoformat(),
+        "database_connected": db_status,
+        "langsmith_enabled": True,
         "langsmith_project": settings.langchain_project,
         "models_available": ["claude", "mistral", "deepseek"],
-        "database_connected": radiology_system.db_client is not None,
-        "timestamp": datetime.now().isoformat()
+        "prompt_templates_available": prompt_count,
+        "enhanced_features": {
+            "image_extraction": True,
+            "literature_limit": 10,
+            "image_relevance_scoring": True,
+            "dynamic_prompts": True
+        }
     }
 
 @app.post("/api/analyze-case")
-async def analyze_radiology_case(case: ClinicalCase):
-    """Analyze radiology case with complete multi-agent pipeline"""
-    
-    logger.info("Received case analysis request", 
-               case_id=case.case_id,
-               imaging_modality=case.imaging_modality,
-               anatomical_region=case.anatomical_region)
-    
-    result = await radiology_system.analyze_case(case)
-    return result
+async def analyze_case(case: ClinicalCase):
+    """Analyze a radiology case with enhanced literature search"""
+    try:
+        logger.info(f"Received case analysis request: {case.case_id}")
+        result = await radiology_system.analyze_case(case)
+        return result
+    except Exception as e:
+        logger.error(f"Case analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/prompts")
 async def list_prompts():
-    """List all available prompt templates"""
-    collection = radiology_system.db_client.prompts
-    prompts = await collection.find({}, {"template_text": 0}).to_list(length=100)
-    return {"prompts": prompts}
+    """List all available prompt templates with details"""
+    try:
+        prompts = await radiology_system.prompt_manager.list_prompts()
+        
+        # Group by template_id to show latest versions
+        grouped_prompts = {}
+        for prompt in prompts:
+            template_id = prompt.template_id
+            if template_id not in grouped_prompts or prompt.version > grouped_prompts[template_id].version:
+                grouped_prompts[template_id] = prompt
+        
+        return {
+            "prompts": [p.dict() for p in grouped_prompts.values()],
+            "total": len(grouped_prompts),
+            "message": "Edit these prompts to customize agent behavior"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/prompts/{template_id}")
 async def get_prompt(template_id: str, version: Optional[str] = None):
-    """Get specific prompt template"""
-    prompt = await radiology_system.prompt_manager.get_prompt(template_id, version)
-    return prompt.dict()
+    """Get a specific prompt template"""
+    try:
+        prompt = await radiology_system.prompt_manager.get_prompt(template_id, version)
+        return prompt.dict()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/prompts")
+async def save_prompt(prompt: PromptTemplate):
+    """Save or update a prompt template"""
+    try:
+        # Increment version if updating existing prompt
+        existing = await radiology_system.db.prompts.find_one({
+            "template_id": prompt.template_id
+        }, sort=[("version", pymongo.DESCENDING)])
+        
+        if existing and existing.get("version") == prompt.version:
+            # Auto-increment version
+            version_parts = prompt.version.split('.')
+            version_parts[-1] = str(int(version_parts[-1]) + 1)
+            prompt.version = '.'.join(version_parts)
+        
+        result = await radiology_system.prompt_manager.save_prompt(prompt)
+        return {
+            "success": True, 
+            "prompt_id": result,
+            "version": prompt.version,
+            "message": f"Prompt '{prompt.name}' saved successfully"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/prompts/{template_id}")
-async def update_prompt(template_id: str, new_template_text: str, description: str = "Updated"):
-    """Create new version of prompt template"""
-    new_prompt = await radiology_system.prompt_manager.create_prompt_version(
-        template_id, new_template_text, description
-    )
-    return {"message": "Prompt updated", "new_version": new_prompt.version}
-
-@app.get("/api/langsmith-dashboard")
-async def get_langsmith_info():
-    """Get LangSmith dashboard information"""
-    return {
-        "langsmith_url": f"https://smith.langchain.com/projects/{settings.langchain_project}",
-        "project_name": settings.langchain_project,
-        "tracing_enabled": settings.langchain_tracing_v2,
-        "api_endpoint": settings.langchain_endpoint
-    }
+async def update_prompt(template_id: str, prompt: PromptTemplate):
+    """Update a specific prompt template"""
+    try:
+        if prompt.template_id != template_id:
+            raise HTTPException(status_code=400, detail="Template ID mismatch")
+        
+        result = await radiology_system.prompt_manager.save_prompt(prompt)
+        return {
+            "success": True,
+            "prompt_id": result,
+            "version": prompt.version,
+            "message": f"Prompt '{prompt.name}' updated to version {prompt.version}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",
+        "main_with_prompts:app",
         host=settings.host,
         port=settings.port,
         reload=settings.debug,
         log_level=settings.log_level.lower()
     )
-
