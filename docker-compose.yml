@@ -40,6 +40,7 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+      - "8123:8123"
     environment:
       - MONGODB_URL=mongodb://admin:radiology123@mongodb:27017/radiology_ai_langchain?authSource=admin
       - REDIS_URL=redis://redis:6379

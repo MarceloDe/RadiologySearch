@@ -1,0 +1,27 @@
+name: Deploy to LangSmith
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'radiology_graph_standalone.py'
+      - '.github/workflows/deploy-langsmith.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Deploy to LangSmith
+      env:
+        LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+      run: |
+        echo "Deploying to LangSmith Hub..."
+        # LangSmith will auto-detect this workflow and deploy

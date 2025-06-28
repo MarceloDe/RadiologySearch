@@ -7,6 +7,9 @@ langchain-anthropic
 langchain-mistralai
 langchain-deepseek
 langsmith
+langgraph>=0.1.55
+langgraph-cli
+langserve
 
 # Web Framework
 fastapi

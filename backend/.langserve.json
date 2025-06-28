@@ -1,0 +1,32 @@
+{
+  "name": "radiology-ai-system",
+  "python_version": "3.11",
+  "port": 8000,
+  "graphs": {
+    "radiology_agent": "./radiology_graph:graph"
+  },
+  "dependencies": [
+    "langchain",
+    "langchain-anthropic", 
+    "langchain-mistralai",
+    "langchain-deepseek",
+    "langgraph>=0.1.55",
+    "langserve",
+    "fastapi",
+    "uvicorn",
+    "pymongo",
+    "motor",
+    "redis",
+    "beautifulsoup4",
+    "httpx",
+    "pillow"
+  ],
+  "env": {
+    "LANGCHAIN_API_KEY": "${LANGCHAIN_API_KEY}",
+    "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
+    "MISTRAL_API_KEY": "${MISTRAL_API_KEY}",
+    "DEEPSEEK_API_KEY": "${DEEPSEEK_API_KEY}",
+    "BRAVE_SEARCH_API_KEY": "${BRAVE_SEARCH_API_KEY}",
+    "LANGCHAIN_PROJECT": "radiology-ai-system"
+  }
+}

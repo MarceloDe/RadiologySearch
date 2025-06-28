@@ -1,0 +1,9 @@
+[tool.langserve]
+export_module = "app"
+export_attr = "app"
+
+[tool.langserve.auth]
+enabled = false
+
+[tool.langserve.dependencies]
+python = "3.11"

@@ -1,0 +1,13 @@
+{
+  "name": "radiology-ai-system",
+  "version": "1.0.0",
+  "description": "RadiologySearch AI System with LangGraph",
+  "python_version": "3.11",
+  "dependencies": ["./requirements.txt"],
+  "graphs": {
+    "radiology_agent": {
+      "path": "radiology_graph:graph",
+      "env": ".env"
+    }
+  }
+}

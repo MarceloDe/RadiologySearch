@@ -87,10 +87,11 @@ function App() {
     }
   };
 
-  const handleInputChange = (field, value) => {
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
     setCaseData(prev => ({
       ...prev,
-      [field]: value
+      [name]: value
     }));
   };
 
@@ -167,8 +168,9 @@ function App() {
             <label>Patient Age</label>
             <input
               type="number"
+              name="patient_age"
               value={caseData.patient_age}
-              onChange={(e) => handleInputChange('patient_age', parseInt(e.target.value))}
+              onChange={handleInputChange}
               required
               min="0"
               max="120"
@@ -178,8 +180,9 @@ function App() {
           <div className="form-group">
             <label>Patient Sex</label>
             <select
+              name="patient_sex"
               value={caseData.patient_sex}
-              onChange={(e) => handleInputChange('patient_sex', e.target.value)}
+              onChange={handleInputChange}
             >
               <option value="Male">Male</option>
               <option value="Female">Female</option>
@@ -190,8 +193,9 @@ function App() {
           <div className="form-group">
             <label>Imaging Modality</label>
             <select
+              name="imaging_modality"
               value={caseData.imaging_modality}
-              onChange={(e) => handleInputChange('imaging_modality', e.target.value)}
+              onChange={handleInputChange}
             >
               <option value="MRI">MRI</option>
               <option value="CT">CT</option>
@@ -205,8 +209,9 @@ function App() {
           <div className="form-group">
             <label>Anatomical Region</label>
             <select
+              name="anatomical_region"
               value={caseData.anatomical_region}
-              onChange={(e) => handleInputChange('anatomical_region', e.target.value)}
+              onChange={handleInputChange}
             >
               <option value="Brain">Brain</option>
               <option value="Spine">Spine</option>
@@ -222,8 +227,9 @@ function App() {
         <div className="form-group full-width">
           <label>Clinical History</label>
           <textarea
+            name="clinical_history"
             value={caseData.clinical_history}
-            onChange={(e) => handleInputChange('clinical_history', e.target.value)}
+            onChange={handleInputChange}
             placeholder="Enter patient's clinical history, symptoms, and relevant medical background..."
             rows="4"
             required
@@ -233,8 +239,9 @@ function App() {
         <div className="form-group full-width">
           <label>Image Description</label>
           <textarea
+            name="image_description"
             value={caseData.image_description}
-            onChange={(e) => handleInputChange('image_description', e.target.value)}
+            onChange={handleInputChange}
             placeholder="Detailed description of imaging findings, including sequences, enhancement patterns, measurements, etc..."
             rows="6"
             required
