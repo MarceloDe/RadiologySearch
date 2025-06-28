@@ -6,7 +6,7 @@
   "dependencies": ["./requirements.txt"],
   "graphs": {
     "radiology_agent": {
-      "path": "radiology_graph:graph",
+      "path": "radiology_graph_detailed:detailed_graph",
       "env": ".env"
     }
   }
