@@ -17,7 +17,7 @@ import structlog
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.tools import BraveSearch
+from brave_search_with_retry import BraveSearchWithRetry
 from langchain_community.document_loaders import PyPDFLoader, WebBaseLoader
 from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import ChatMistralAI
@@ -60,7 +60,7 @@ class EnhancedLiteratureSearchAgent:
         self.mistral = mistral_model
         self.claude = claude_model
         self.langsmith_tracer = langsmith_tracer
-        self.search_tool = BraveSearch(api_key=brave_api_key, search_kwargs={"count": 20})
+        self.search_tool = BraveSearchWithRetry(api_key=brave_api_key, search_kwargs={"count": 20})
         
         # Enhanced search query generation prompt
         self.search_prompt = ChatPromptTemplate.from_messages([
@@ -487,30 +487,8 @@ Evaluate relevance.""")
         """Execute search and return raw results"""
         try:
             logger.info(f"Executing search query: {query}")
-            loop = asyncio.get_event_loop()
-            results = await loop.run_in_executor(None, self.search_tool.run, query)
-            
-            # Parse results
-            parsed = []
-            if isinstance(results, str):
-                # Try to parse as JSON
-                try:
-                    import json
-                    data = json.loads(results)
-                    if isinstance(data, list):
-                        parsed = data
-                except:
-                    # Parse as text
-                    lines = results.split('\n')
-                    for i in range(0, len(lines), 3):
-                        if i + 2 < len(lines):
-                            parsed.append({
-                                'title': lines[i].strip(),
-                                'url': lines[i + 1].strip(),
-                                'snippet': lines[i + 2].strip()
-                            })
-            
-            return parsed
+            results = await self.search_tool.search(query)
+            return results  # Already parsed by the wrapper
             
         except Exception as e:
             logger.error(f"Search failed: {e}")
